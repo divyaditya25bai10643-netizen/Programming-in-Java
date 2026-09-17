@@ -1,0 +1,894 @@
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.util.function.Function;
+import java.util.regex.Pattern;
+
+/**
+ * Library Management System — single-file edition.
+ *
+ * This is a condensed, single-file version of a multi-package Java project,
+ * made to paste-and-run on online Java compilers (OneCompiler, JDoodle,
+ * Replit, Programiz, etc.) that only accept one file and give you a plain
+ * stdin/stdout console.
+ *
+ * Two things were simplified to make that possible:
+ *   1. Persistence is in-memory only (no data/*.txt files) — online compilers
+ *      don't give you a persistent filesystem between runs anyway, so nothing
+ *      is lost by dropping file storage. Sample data is re-seeded every run.
+ *   2. Logging goes to the console instead of logs/library.log, since most
+ *      online compilers don't let you read files back out after the run.
+ *
+ * Everything else — validation rules, custom exceptions, fine calculation,
+ * the 3 functional modules (Members / Books / Issue-Return) — is unchanged.
+ *
+ * How to run here: paste this whole file into the compiler as
+ * LibraryManagementSystem.java (the public class name must match the file
+ * name) and run it. If the compiler has a separate "stdin" box, use it to
+ * type menu choices; otherwise type directly into the console.
+ */
+public class LibraryManagementSystem {
+
+    // ==================================================================
+    // Models
+    // ==================================================================
+
+    static class Book {
+        private final String isbn;
+        private String title;
+        private String author;
+        private String genre;
+        private int totalCopies;
+        private int availableCopies;
+
+        Book(String isbn, String title, String author, String genre, int totalCopies) {
+            this.isbn = isbn;
+            this.title = title;
+            this.author = author;
+            this.genre = genre;
+            this.totalCopies = totalCopies;
+            this.availableCopies = totalCopies;
+        }
+
+        String getIsbn() { return isbn; }
+        String getTitle() { return title; }
+        void setTitle(String title) { this.title = title; }
+        String getAuthor() { return author; }
+        void setAuthor(String author) { this.author = author; }
+        String getGenre() { return genre; }
+        void setGenre(String genre) { this.genre = genre; }
+        int getTotalCopies() { return totalCopies; }
+        void setTotalCopies(int totalCopies) { this.totalCopies = totalCopies; }
+        int getAvailableCopies() { return availableCopies; }
+        void setAvailableCopies(int availableCopies) { this.availableCopies = availableCopies; }
+        boolean isAvailable() { return availableCopies > 0; }
+
+        @Override
+        public String toString() {
+            return String.format("ISBN: %-15s | %-30s | Author: %-20s | Genre: %-12s | Available: %d/%d",
+                    isbn, title, author, genre, availableCopies, totalCopies);
+        }
+    }
+
+    static class Member {
+        private final String memberId;
+        private String name;
+        private String email;
+        private String phone;
+        private boolean active;
+
+        Member(String memberId, String name, String email, String phone) {
+            this.memberId = memberId;
+            this.name = name;
+            this.email = email;
+            this.phone = phone;
+            this.active = true;
+        }
+
+        String getMemberId() { return memberId; }
+        String getName() { return name; }
+        void setName(String name) { this.name = name; }
+        String getEmail() { return email; }
+        void setEmail(String email) { this.email = email; }
+        String getPhone() { return phone; }
+        void setPhone(String phone) { this.phone = phone; }
+        boolean isActive() { return active; }
+        void setActive(boolean active) { this.active = active; }
+
+        @Override
+        public String toString() {
+            return String.format("ID: %-8s | %-20s | Email: %-25s | Phone: %-12s | Status: %s",
+                    memberId, name, email, phone, active ? "ACTIVE" : "INACTIVE");
+        }
+    }
+
+    static class Transaction {
+        enum Status { ISSUED, RETURNED }
+
+        private final String transactionId;
+        private final String memberId;
+        private final String isbn;
+        private final LocalDate issueDate;
+        private final LocalDate dueDate;
+        private LocalDate returnDate;
+        private double fineAmount;
+        private Status status;
+
+        Transaction(String transactionId, String memberId, String isbn,
+                    LocalDate issueDate, LocalDate dueDate) {
+            this.transactionId = transactionId;
+            this.memberId = memberId;
+            this.isbn = isbn;
+            this.issueDate = issueDate;
+            this.dueDate = dueDate;
+            this.returnDate = null;
+            this.fineAmount = 0.0;
+            this.status = Status.ISSUED;
+        }
+
+        String getTransactionId() { return transactionId; }
+        String getMemberId() { return memberId; }
+        String getIsbn() { return isbn; }
+        LocalDate getDueDate() { return dueDate; }
+        void setReturnDate(LocalDate returnDate) { this.returnDate = returnDate; }
+        double getFineAmount() { return fineAmount; }
+        void setFineAmount(double fineAmount) { this.fineAmount = fineAmount; }
+        Status getStatus() { return status; }
+        void setStatus(Status status) { this.status = status; }
+
+        boolean isOverdue(LocalDate today) {
+            return status == Status.ISSUED && today.isAfter(dueDate);
+        }
+
+        @Override
+        public String toString() {
+            return String.format("TxnID: %-10s | Member: %-8s | ISBN: %-15s | Issued: %s | Due: %s | Returned: %-10s | Fine: Rs.%.2f | %s",
+                    transactionId, memberId, isbn, issueDate, dueDate,
+                    returnDate == null ? "-" : returnDate.toString(), fineAmount, status);
+        }
+    }
+
+    // ==================================================================
+    // Custom checked exceptions
+    // ==================================================================
+
+    static class BookNotFoundException extends Exception {
+        BookNotFoundException(String message) { super(message); }
+    }
+
+    static class BookUnavailableException extends Exception {
+        BookUnavailableException(String message) { super(message); }
+    }
+
+    static class DuplicateEntryException extends Exception {
+        DuplicateEntryException(String message) { super(message); }
+    }
+
+    static class InvalidInputException extends Exception {
+        InvalidInputException(String message) { super(message); }
+    }
+
+    static class MemberNotFoundException extends Exception {
+        MemberNotFoundException(String message) { super(message); }
+    }
+
+    // ==================================================================
+    // Utilities
+    // ==================================================================
+
+    /** Minimal console-only stand-in for the file-based logger. */
+    static final class LoggerUtil {
+        private LoggerUtil() {}
+        static void info(String message) { System.out.println("[INFO] " + message); }
+        static void warning(String message) { System.out.println("[WARN] " + message); }
+        static void severe(String message) { System.out.println("[ERROR] " + message); }
+    }
+
+    static final class IdGenerator {
+        private IdGenerator() {}
+
+        static <T> String nextId(List<T> existing, Function<T, String> idExtractor,
+                                  String prefix, int padding) {
+            int max = 0;
+            for (T item : existing) {
+                String id = idExtractor.apply(item);
+                String numericPart = id.replaceFirst("^" + prefix, "");
+                try {
+                    int num = Integer.parseInt(numericPart);
+                    if (num > max) max = num;
+                } catch (NumberFormatException ignored) {
+                    // Skip malformed IDs rather than letting them break generation.
+                }
+            }
+            int next = max + 1;
+            return prefix + String.format("%0" + padding + "d", next);
+        }
+    }
+
+    static final class InputValidator {
+        private static final Pattern EMAIL_PATTERN =
+                Pattern.compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
+        private static final Pattern PHONE_PATTERN = Pattern.compile("^[0-9]{10}$");
+        private static final Pattern ISBN_PATTERN = Pattern.compile("^[0-9Xx-]{5,20}$");
+
+        private InputValidator() {}
+
+        static void requireNonBlank(String value, String fieldName) throws InvalidInputException {
+            if (value == null || value.trim().isEmpty()) {
+                throw new InvalidInputException(fieldName + " cannot be empty.");
+            }
+            if (value.contains("|")) {
+                throw new InvalidInputException(fieldName + " cannot contain the '|' character.");
+            }
+        }
+
+        static void validateEmail(String email) throws InvalidInputException {
+            requireNonBlank(email, "Email");
+            if (!EMAIL_PATTERN.matcher(email).matches()) {
+                throw new InvalidInputException("Email format is invalid: " + email);
+            }
+        }
+
+        static void validatePhone(String phone) throws InvalidInputException {
+            requireNonBlank(phone, "Phone");
+            if (!PHONE_PATTERN.matcher(phone).matches()) {
+                throw new InvalidInputException("Phone number must be exactly 10 digits.");
+            }
+        }
+
+        static void validateIsbn(String isbn) throws InvalidInputException {
+            requireNonBlank(isbn, "ISBN");
+            if (!ISBN_PATTERN.matcher(isbn).matches()) {
+                throw new InvalidInputException("ISBN format is invalid: " + isbn);
+            }
+        }
+
+        static void validatePositiveInt(int value, String fieldName) throws InvalidInputException {
+            if (value <= 0) {
+                throw new InvalidInputException(fieldName + " must be a positive number.");
+            }
+        }
+    }
+
+    // ==================================================================
+    // In-memory repositories (replace the file-backed ones)
+    // ==================================================================
+
+    static class BookRepository {
+        private final List<Book> books = new ArrayList<>();
+
+        List<Book> findAll() { return new ArrayList<>(books); }
+
+        Optional<Book> findByIsbn(String isbn) {
+            return books.stream().filter(b -> b.getIsbn().equals(isbn)).findFirst();
+        }
+
+        List<Book> searchByTitle(String keyword) {
+            String lower = keyword.toLowerCase();
+            List<Book> result = new ArrayList<>();
+            for (Book b : books) if (b.getTitle().toLowerCase().contains(lower)) result.add(b);
+            return result;
+        }
+
+        List<Book> searchByAuthor(String keyword) {
+            String lower = keyword.toLowerCase();
+            List<Book> result = new ArrayList<>();
+            for (Book b : books) if (b.getAuthor().toLowerCase().contains(lower)) result.add(b);
+            return result;
+        }
+
+        void save(Book book) { books.add(book); }
+
+        void update(Book updated) {
+            for (int i = 0; i < books.size(); i++) {
+                if (books.get(i).getIsbn().equals(updated.getIsbn())) {
+                    books.set(i, updated);
+                    return;
+                }
+            }
+        }
+
+        boolean deleteByIsbn(String isbn) { return books.removeIf(b -> b.getIsbn().equals(isbn)); }
+    }
+
+    static class MemberRepository {
+        private final List<Member> members = new ArrayList<>();
+
+        List<Member> findAll() { return new ArrayList<>(members); }
+
+        Optional<Member> findById(String memberId) {
+            return members.stream().filter(m -> m.getMemberId().equals(memberId)).findFirst();
+        }
+
+        Optional<Member> findByEmail(String email) {
+            return members.stream().filter(m -> m.getEmail().equalsIgnoreCase(email)).findFirst();
+        }
+
+        void save(Member member) { members.add(member); }
+
+        void update(Member updated) {
+            for (int i = 0; i < members.size(); i++) {
+                if (members.get(i).getMemberId().equals(updated.getMemberId())) {
+                    members.set(i, updated);
+                    return;
+                }
+            }
+        }
+
+        boolean deleteById(String memberId) { return members.removeIf(m -> m.getMemberId().equals(memberId)); }
+    }
+
+    static class TransactionRepository {
+        private final List<Transaction> transactions = new ArrayList<>();
+
+        List<Transaction> findAll() { return new ArrayList<>(transactions); }
+
+        Optional<Transaction> findById(String transactionId) {
+            return transactions.stream().filter(t -> t.getTransactionId().equals(transactionId)).findFirst();
+        }
+
+        List<Transaction> findActiveByMember(String memberId) {
+            List<Transaction> result = new ArrayList<>();
+            for (Transaction t : transactions) {
+                if (t.getMemberId().equals(memberId) && t.getStatus() == Transaction.Status.ISSUED) {
+                    result.add(t);
+                }
+            }
+            return result;
+        }
+
+        List<Transaction> findOverdue(LocalDate today) {
+            List<Transaction> result = new ArrayList<>();
+            for (Transaction t : transactions) if (t.isOverdue(today)) result.add(t);
+            return result;
+        }
+
+        void save(Transaction transaction) { transactions.add(transaction); }
+
+        void update(Transaction updated) {
+            for (int i = 0; i < transactions.size(); i++) {
+                if (transactions.get(i).getTransactionId().equals(updated.getTransactionId())) {
+                    transactions.set(i, updated);
+                    return;
+                }
+            }
+        }
+    }
+
+    // ==================================================================
+    // Services (business logic — unchanged from the multi-file version)
+    // ==================================================================
+
+    static class BookService {
+        private final BookRepository bookRepository;
+
+        BookService(BookRepository bookRepository) { this.bookRepository = bookRepository; }
+
+        Book addBook(String isbn, String title, String author, String genre, int totalCopies)
+                throws InvalidInputException, DuplicateEntryException {
+            InputValidator.validateIsbn(isbn);
+            InputValidator.requireNonBlank(title, "Title");
+            InputValidator.requireNonBlank(author, "Author");
+            InputValidator.requireNonBlank(genre, "Genre");
+            InputValidator.validatePositiveInt(totalCopies, "Total copies");
+
+            if (bookRepository.findByIsbn(isbn).isPresent()) {
+                throw new DuplicateEntryException("A book with ISBN '" + isbn + "' already exists.");
+            }
+
+            Book book = new Book(isbn, title, author, genre, totalCopies);
+            bookRepository.save(book);
+            LoggerUtil.info("Added new book: " + isbn + " (" + title + ")");
+            return book;
+        }
+
+        List<Book> listAllBooks() { return bookRepository.findAll(); }
+
+        Book getBook(String isbn) throws BookNotFoundException {
+            return bookRepository.findByIsbn(isbn)
+                    .orElseThrow(() -> new BookNotFoundException("No book found with ISBN: " + isbn));
+        }
+
+        List<Book> searchByTitle(String keyword) throws InvalidInputException {
+            InputValidator.requireNonBlank(keyword, "Search keyword");
+            return bookRepository.searchByTitle(keyword);
+        }
+
+        List<Book> searchByAuthor(String keyword) throws InvalidInputException {
+            InputValidator.requireNonBlank(keyword, "Search keyword");
+            return bookRepository.searchByAuthor(keyword);
+        }
+
+        Book updateBook(String isbn, String title, String author, String genre, Integer totalCopies)
+                throws BookNotFoundException, InvalidInputException {
+            Book existing = getBook(isbn);
+            if (title != null && !title.isBlank()) existing.setTitle(title);
+            if (author != null && !author.isBlank()) existing.setAuthor(author);
+            if (genre != null && !genre.isBlank()) existing.setGenre(genre);
+            if (totalCopies != null) {
+                InputValidator.validatePositiveInt(totalCopies, "Total copies");
+                int issuedCount = existing.getTotalCopies() - existing.getAvailableCopies();
+                if (totalCopies < issuedCount) {
+                    throw new InvalidInputException(
+                            "Cannot set total copies below the number currently issued (" + issuedCount + ").");
+                }
+                existing.setAvailableCopies(totalCopies - issuedCount);
+                existing.setTotalCopies(totalCopies);
+            }
+            bookRepository.update(existing);
+            LoggerUtil.info("Updated book: " + isbn);
+            return existing;
+        }
+
+        void deleteBook(String isbn) throws BookNotFoundException {
+            Book book = getBook(isbn);
+            if (book.getAvailableCopies() != book.getTotalCopies()) {
+                LoggerUtil.warning("Deleting book " + isbn + " while copies are still on loan.");
+            }
+            bookRepository.deleteByIsbn(isbn);
+            LoggerUtil.info("Deleted book: " + isbn);
+        }
+    }
+
+    static class MemberService {
+        private final MemberRepository memberRepository;
+
+        MemberService(MemberRepository memberRepository) { this.memberRepository = memberRepository; }
+
+        Member registerMember(String name, String email, String phone)
+                throws InvalidInputException, DuplicateEntryException {
+            InputValidator.requireNonBlank(name, "Name");
+            InputValidator.validateEmail(email);
+            InputValidator.validatePhone(phone);
+
+            if (memberRepository.findByEmail(email).isPresent()) {
+                throw new DuplicateEntryException("A member with email '" + email + "' is already registered.");
+            }
+
+            String id = IdGenerator.nextId(memberRepository.findAll(), Member::getMemberId, "M", 3);
+            Member member = new Member(id, name, email, phone);
+            memberRepository.save(member);
+            LoggerUtil.info("Registered new member: " + id + " (" + name + ")");
+            return member;
+        }
+
+        List<Member> listAllMembers() { return memberRepository.findAll(); }
+
+        Member getMember(String memberId) throws MemberNotFoundException {
+            return memberRepository.findById(memberId)
+                    .orElseThrow(() -> new MemberNotFoundException("No member found with ID: " + memberId));
+        }
+
+        Member updateMember(String memberId, String name, String email, String phone)
+                throws MemberNotFoundException, InvalidInputException {
+            Member existing = getMember(memberId);
+            if (name != null && !name.isBlank()) existing.setName(name);
+            if (email != null && !email.isBlank()) {
+                InputValidator.validateEmail(email);
+                existing.setEmail(email);
+            }
+            if (phone != null && !phone.isBlank()) {
+                InputValidator.validatePhone(phone);
+                existing.setPhone(phone);
+            }
+            memberRepository.update(existing);
+            LoggerUtil.info("Updated member: " + memberId);
+            return existing;
+        }
+
+        void deactivateMember(String memberId) throws MemberNotFoundException {
+            Member member = getMember(memberId);
+            member.setActive(false);
+            memberRepository.update(member);
+            LoggerUtil.info("Deactivated member: " + memberId);
+        }
+
+        void deleteMember(String memberId) throws MemberNotFoundException {
+            if (!memberRepository.deleteById(memberId)) {
+                throw new MemberNotFoundException("No member found with ID: " + memberId);
+            }
+            LoggerUtil.info("Deleted member: " + memberId);
+        }
+    }
+
+    static class TransactionService {
+        static final int LOAN_PERIOD_DAYS = 14;
+        static final double FINE_PER_DAY = 5.0;
+        static final double MAX_FINE = 200.0;
+        static final int MAX_BOOKS_PER_MEMBER = 5;
+
+        private final TransactionRepository transactionRepository;
+        private final BookRepository bookRepository;
+        private final MemberRepository memberRepository;
+
+        TransactionService(TransactionRepository transactionRepository,
+                            BookRepository bookRepository,
+                            MemberRepository memberRepository) {
+            this.transactionRepository = transactionRepository;
+            this.bookRepository = bookRepository;
+            this.memberRepository = memberRepository;
+        }
+
+        Transaction issueBook(String memberId, String isbn)
+                throws MemberNotFoundException, BookNotFoundException, BookUnavailableException, InvalidInputException {
+
+            Member member = memberRepository.findById(memberId)
+                    .orElseThrow(() -> new MemberNotFoundException("No member found with ID: " + memberId));
+            if (!member.isActive()) {
+                throw new InvalidInputException("Member " + memberId + " is inactive and cannot borrow books.");
+            }
+
+            Book book = bookRepository.findByIsbn(isbn)
+                    .orElseThrow(() -> new BookNotFoundException("No book found with ISBN: " + isbn));
+            if (!book.isAvailable()) {
+                throw new BookUnavailableException("No available copies of '" + book.getTitle() + "' right now.");
+            }
+
+            int currentlyHeld = transactionRepository.findActiveByMember(memberId).size();
+            if (currentlyHeld >= MAX_BOOKS_PER_MEMBER) {
+                throw new InvalidInputException(
+                        "Member " + memberId + " already holds the maximum of " + MAX_BOOKS_PER_MEMBER + " books.");
+            }
+
+            LocalDate today = LocalDate.now();
+            LocalDate dueDate = today.plusDays(LOAN_PERIOD_DAYS);
+            String txnId = IdGenerator.nextId(transactionRepository.findAll(), Transaction::getTransactionId, "T", 5);
+
+            Transaction transaction = new Transaction(txnId, memberId, isbn, today, dueDate);
+            transactionRepository.save(transaction);
+
+            book.setAvailableCopies(book.getAvailableCopies() - 1);
+            bookRepository.update(book);
+
+            LoggerUtil.info("Issued book " + isbn + " to member " + memberId + " (txn " + txnId + ")");
+            return transaction;
+        }
+
+        Transaction returnBook(String transactionId)
+                throws InvalidInputException, BookNotFoundException {
+
+            Transaction transaction = transactionRepository.findById(transactionId)
+                    .orElseThrow(() -> new InvalidInputException("No transaction found with ID: " + transactionId));
+
+            if (transaction.getStatus() == Transaction.Status.RETURNED) {
+                throw new InvalidInputException("Transaction " + transactionId + " was already returned.");
+            }
+
+            LocalDate today = LocalDate.now();
+            double fine = calculateFine(transaction.getDueDate(), today);
+
+            transaction.setReturnDate(today);
+            transaction.setFineAmount(fine);
+            transaction.setStatus(Transaction.Status.RETURNED);
+            transactionRepository.update(transaction);
+
+            Book book = bookRepository.findByIsbn(transaction.getIsbn())
+                    .orElseThrow(() -> new BookNotFoundException("Book referenced by transaction not found."));
+            book.setAvailableCopies(Math.min(book.getTotalCopies(), book.getAvailableCopies() + 1));
+            bookRepository.update(book);
+
+            LoggerUtil.info("Returned transaction " + transactionId + " with fine Rs." + fine);
+            return transaction;
+        }
+
+        /** Pure function so it stays easy to reason about / unit test. */
+        static double calculateFine(LocalDate dueDate, LocalDate returnDate) {
+            if (!returnDate.isAfter(dueDate)) return 0.0;
+            long daysLate = ChronoUnit.DAYS.between(dueDate, returnDate);
+            double fine = daysLate * FINE_PER_DAY;
+            return Math.min(fine, MAX_FINE);
+        }
+
+        List<Transaction> getAllTransactions() { return transactionRepository.findAll(); }
+
+        List<Transaction> getOverdueReport() { return transactionRepository.findOverdue(LocalDate.now()); }
+
+        List<Transaction> getActiveTransactionsForMember(String memberId) {
+            return transactionRepository.findActiveByMember(memberId);
+        }
+
+        double getTotalFinesCollected() {
+            double total = 0.0;
+            for (Transaction t : transactionRepository.findAll()) {
+                if (t.getStatus() == Transaction.Status.RETURNED) total += t.getFineAmount();
+            }
+            return total;
+        }
+    }
+
+    // ==================================================================
+    // CLI (menu-driven, same flow as the original Main class)
+    // ==================================================================
+
+    private static final Scanner scanner = new Scanner(System.in);
+
+    private static MemberService memberService;
+    private static BookService bookService;
+    private static TransactionService transactionService;
+
+    public static void main(String[] args) {
+        LoggerUtil.info("Application starting.");
+
+        BookRepository bookRepository = new BookRepository();
+        MemberRepository memberRepository = new MemberRepository();
+        TransactionRepository transactionRepository = new TransactionRepository();
+
+        memberService = new MemberService(memberRepository);
+        bookService = new BookService(bookRepository);
+        transactionService = new TransactionService(transactionRepository, bookRepository, memberRepository);
+
+        seedSampleData();
+
+        boolean running = true;
+        while (running) {
+            printMainMenu();
+            if (!scanner.hasNextLine()) break; // no more stdin (e.g. non-interactive online run)
+            String choice = scanner.nextLine().trim();
+            try {
+                switch (choice) {
+                    case "1" -> memberMenu();
+                    case "2" -> bookMenu();
+                    case "3" -> transactionMenu();
+                    case "0" -> {
+                        running = false;
+                        System.out.println("Goodbye!");
+                        LoggerUtil.info("Application exiting normally.");
+                    }
+                    default -> System.out.println("Invalid choice. Please try again.");
+                }
+            } catch (Exception e) {
+                System.out.println("Error: " + e.getMessage());
+                LoggerUtil.severe("Unhandled error in menu loop: " + e.getMessage());
+            }
+        }
+    }
+
+    private static void printMainMenu() {
+        System.out.println();
+        System.out.println("==================================================");
+        System.out.println(" LIBRARY MANAGEMENT SYSTEM");
+        System.out.println("==================================================");
+        System.out.println(" 1. Member Management");
+        System.out.println(" 2. Book Inventory Management");
+        System.out.println(" 3. Issue / Return / Reports");
+        System.out.println(" 0. Exit");
+        System.out.print("Enter your choice: ");
+    }
+
+    private static void memberMenu() {
+        System.out.println();
+        System.out.println("---- Member Management ----");
+        System.out.println("1. Register new member");
+        System.out.println("2. List all members");
+        System.out.println("3. View member by ID");
+        System.out.println("4. Update member");
+        System.out.println("5. Deactivate member");
+        System.out.println("6. Delete member");
+        System.out.println("0. Back");
+        System.out.print("Enter choice: ");
+        String choice = scanner.nextLine().trim();
+
+        try {
+            switch (choice) {
+                case "1" -> {
+                    System.out.print("Name: ");
+                    String name = scanner.nextLine();
+                    System.out.print("Email: ");
+                    String email = scanner.nextLine();
+                    System.out.print("Phone (10 digits): ");
+                    String phone = scanner.nextLine();
+                    Member m = memberService.registerMember(name, email, phone);
+                    System.out.println("Registered successfully: " + m);
+                }
+                case "2" -> {
+                    List<Member> members = memberService.listAllMembers();
+                    if (members.isEmpty()) System.out.println("No members registered yet.");
+                    members.forEach(System.out::println);
+                }
+                case "3" -> {
+                    System.out.print("Member ID: ");
+                    String id = scanner.nextLine().trim();
+                    System.out.println(memberService.getMember(id));
+                }
+                case "4" -> {
+                    System.out.print("Member ID to update: ");
+                    String id = scanner.nextLine().trim();
+                    System.out.print("New name (blank to keep unchanged): ");
+                    String name = scanner.nextLine();
+                    System.out.print("New email (blank to keep unchanged): ");
+                    String email = scanner.nextLine();
+                    System.out.print("New phone (blank to keep unchanged): ");
+                    String phone = scanner.nextLine();
+                    Member updated = memberService.updateMember(id, name, email, phone);
+                    System.out.println("Updated: " + updated);
+                }
+                case "5" -> {
+                    System.out.print("Member ID to deactivate: ");
+                    String id = scanner.nextLine().trim();
+                    memberService.deactivateMember(id);
+                    System.out.println("Member deactivated.");
+                }
+                case "6" -> {
+                    System.out.print("Member ID to delete: ");
+                    String id = scanner.nextLine().trim();
+                    memberService.deleteMember(id);
+                    System.out.println("Member deleted.");
+                }
+                case "0" -> { /* back to main menu */ }
+                default -> System.out.println("Invalid choice.");
+            }
+        } catch (InvalidInputException | DuplicateEntryException | MemberNotFoundException e) {
+            System.out.println("Error: " + e.getMessage());
+            LoggerUtil.warning("Member module error: " + e.getMessage());
+        }
+    }
+
+    private static void bookMenu() {
+        System.out.println();
+        System.out.println("---- Book Inventory Management ----");
+        System.out.println("1. Add new book");
+        System.out.println("2. List all books");
+        System.out.println("3. Search by title");
+        System.out.println("4. Search by author");
+        System.out.println("5. Update book");
+        System.out.println("6. Delete book");
+        System.out.println("0. Back");
+        System.out.print("Enter choice: ");
+        String choice = scanner.nextLine().trim();
+
+        try {
+            switch (choice) {
+                case "1" -> {
+                    System.out.print("ISBN: ");
+                    String isbn = scanner.nextLine();
+                    System.out.print("Title: ");
+                    String title = scanner.nextLine();
+                    System.out.print("Author: ");
+                    String author = scanner.nextLine();
+                    System.out.print("Genre: ");
+                    String genre = scanner.nextLine();
+                    System.out.print("Total copies: ");
+                    int copies = readInt();
+                    Book b = bookService.addBook(isbn, title, author, genre, copies);
+                    System.out.println("Added: " + b);
+                }
+                case "2" -> {
+                    List<Book> books = bookService.listAllBooks();
+                    if (books.isEmpty()) System.out.println("No books in catalog yet.");
+                    books.forEach(System.out::println);
+                }
+                case "3" -> {
+                    System.out.print("Title keyword: ");
+                    String keyword = scanner.nextLine();
+                    printBookResults(bookService.searchByTitle(keyword));
+                }
+                case "4" -> {
+                    System.out.print("Author keyword: ");
+                    String keyword = scanner.nextLine();
+                    printBookResults(bookService.searchByAuthor(keyword));
+                }
+                case "5" -> {
+                    System.out.print("ISBN to update: ");
+                    String isbn = scanner.nextLine().trim();
+                    System.out.print("New title (blank to keep unchanged): ");
+                    String title = scanner.nextLine();
+                    System.out.print("New author (blank to keep unchanged): ");
+                    String author = scanner.nextLine();
+                    System.out.print("New genre (blank to keep unchanged): ");
+                    String genre = scanner.nextLine();
+                    System.out.print("New total copies (blank to keep unchanged): ");
+                    String copiesRaw = scanner.nextLine().trim();
+                    Integer copies = copiesRaw.isEmpty() ? null : Integer.parseInt(copiesRaw);
+                    Book updated = bookService.updateBook(isbn, title, author, genre, copies);
+                    System.out.println("Updated: " + updated);
+                }
+                case "6" -> {
+                    System.out.print("ISBN to delete: ");
+                    String isbn = scanner.nextLine().trim();
+                    bookService.deleteBook(isbn);
+                    System.out.println("Book deleted.");
+                }
+                case "0" -> { /* back to main menu */ }
+                default -> System.out.println("Invalid choice.");
+            }
+        } catch (InvalidInputException | DuplicateEntryException | BookNotFoundException e) {
+            System.out.println("Error: " + e.getMessage());
+            LoggerUtil.warning("Book module error: " + e.getMessage());
+        } catch (NumberFormatException e) {
+            System.out.println("Error: please enter a valid whole number.");
+        }
+    }
+
+    private static void printBookResults(List<Book> results) {
+        if (results.isEmpty()) System.out.println("No matching books found.");
+        results.forEach(System.out::println);
+    }
+
+    private static void transactionMenu() {
+        System.out.println();
+        System.out.println("---- Issue / Return / Reports ----");
+        System.out.println("1. Issue a book");
+        System.out.println("2. Return a book");
+        System.out.println("3. View all transactions");
+        System.out.println("4. Overdue report");
+        System.out.println("5. Active loans for a member");
+        System.out.println("6. Total fines collected (analytics)");
+        System.out.println("0. Back");
+        System.out.print("Enter choice: ");
+        String choice = scanner.nextLine().trim();
+
+        try {
+            switch (choice) {
+                case "1" -> {
+                    System.out.print("Member ID: ");
+                    String memberId = scanner.nextLine().trim();
+                    System.out.print("Book ISBN: ");
+                    String isbn = scanner.nextLine().trim();
+                    Transaction t = transactionService.issueBook(memberId, isbn);
+                    System.out.println("Issued: " + t);
+                }
+                case "2" -> {
+                    System.out.print("Transaction ID: ");
+                    String txnId = scanner.nextLine().trim();
+                    Transaction t = transactionService.returnBook(txnId);
+                    System.out.println("Returned: " + t);
+                    if (t.getFineAmount() > 0) {
+                        System.out.printf("A fine of Rs.%.2f is due.%n", t.getFineAmount());
+                    }
+                }
+                case "3" -> {
+                    List<Transaction> all = transactionService.getAllTransactions();
+                    if (all.isEmpty()) System.out.println("No transactions recorded yet.");
+                    all.forEach(System.out::println);
+                }
+                case "4" -> {
+                    List<Transaction> overdue = transactionService.getOverdueReport();
+                    if (overdue.isEmpty()) {
+                        System.out.println("No overdue books. Great!");
+                    } else {
+                        System.out.println("Overdue transactions:");
+                        overdue.forEach(System.out::println);
+                    }
+                }
+                case "5" -> {
+                    System.out.print("Member ID: ");
+                    String memberId = scanner.nextLine().trim();
+                    List<Transaction> active = transactionService.getActiveTransactionsForMember(memberId);
+                    if (active.isEmpty()) System.out.println("This member has no active loans.");
+                    active.forEach(System.out::println);
+                }
+                case "6" -> System.out.printf("Total fines collected to date: Rs.%.2f%n",
+                        transactionService.getTotalFinesCollected());
+                case "0" -> { /* back to main menu */ }
+                default -> System.out.println("Invalid choice.");
+            }
+        } catch (MemberNotFoundException | BookNotFoundException | BookUnavailableException
+                 | InvalidInputException e) {
+            System.out.println("Error: " + e.getMessage());
+            LoggerUtil.warning("Transaction module error: " + e.getMessage());
+        }
+    }
+
+    private static int readInt() {
+        while (true) {
+            try {
+                return Integer.parseInt(scanner.nextLine().trim());
+            } catch (NumberFormatException e) {
+                System.out.print("Please enter a valid whole number: ");
+            }
+        }
+    }
+
+    /** Seeds a couple of sample records every run, since there's no persistence. */
+    private static void seedSampleData() {
+        try {
+            bookService.addBook("9780134685991", "Effective Java", "Joshua Bloch", "Programming", 3);
+            bookService.addBook("9780132350884", "Clean Code", "Robert C. Martin", "Programming", 2);
+            bookService.addBook("9780201633610", "Design Patterns", "Erich Gamma", "Programming", 1);
+            memberService.registerMember("Asha Verma", "asha.verma@example.com", "9876543210");
+            memberService.registerMember("Rohit Sharma", "rohit.sharma@example.com", "9123456780");
+        } catch (Exception e) {
+            LoggerUtil.warning("Could not seed sample data: " + e.getMessage());
+        }
+    }
+}
