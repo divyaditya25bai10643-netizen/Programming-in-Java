@@ -67,4 +67,47 @@ LibraryManagementSystem/
 ├── docs/diagrams/                 # Architecture, UML, ER, sequence diagrams
 ├── build.sh / run.sh / run_tests.sh
 └── pom.xml                        # Optional, for Maven users with internet access
+
+## Steps to Install & Run
+
+No installation required beyond a JDK (17+). Everything is self-contained.
+
+```bash
+# 1. Clone the repository
+git clone <your-repo-url>
+cd LibraryManagementSystem
+
+# 2. Build (plain javac, no internet/Maven needed)
+./build.sh
+
+# 3. Run the application
+./run.sh
+```
+
+If you prefer Maven and have internet access:
+```bash
+mvn clean package
+java -jar target/library-management-system.jar
+```
+
+On first run, the app seeds 3 sample books and 2 sample members so the menu
+isn't empty. All subsequent changes are saved to `data/*.txt`.
+
+## Instructions for Testing
+
+A lightweight, dependency-free test suite is included (no internet access
+was available to fetch JUnit while building this project, so a small
+assert-based runner is used instead — see comments in
+`LibraryTestRunner.java` for how to port it to JUnit 5 if you have Maven +
+internet access).
+
+```bash
+./build.sh
+./run_tests.sh
+```
+
+Tests cover: fine calculation (on-time, late, capped), email/phone/ISBN
+validation, duplicate-member rejection, and the full issue → return flow
+(including rejecting issue of an already-unavailable book).
+
 ```
